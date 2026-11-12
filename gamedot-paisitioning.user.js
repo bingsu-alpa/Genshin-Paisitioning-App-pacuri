@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         게임닷 원신 맵스 실시간 위치
 // @namespace    gamedot-map-paisitioning-compat
-// @version      0.1.0
+// @version      0.2.0
 // @description  Haytsir의 원신 파이지셔닝 앱 v1.2.2와 새 게임닷 티바트 지도를 연결합니다.
 // @match        https://gamedot.org/genshin/map/*
 // @run-at       document-start
@@ -20,9 +20,11 @@
   const page = unsafeWindow;
   const route = '/genshin/map/teyvat';
   const origin = [10204, 19139]; // GameDot Teyvat relativeY, relativeX
-  let map, marker, panel, status, connect, stop, follow;
+  let map, marker, arrow, view, panel, status, connect, stop, follow;
   let socket, session, position, renderedPosition;
   let lastUpdate = 0;
+  let heading = null;
+  let cameraHeading = null;
 
   function show(message) {
     if (status) status.textContent = message;
@@ -51,7 +53,7 @@
 
   function clearMarker() {
     marker?.remove();
-    marker = null;
+    marker = arrow = view = null;
     renderedPosition = null;
   }
 
@@ -65,25 +67,47 @@
     panel.hidden = location.pathname.replace(/\/$/, '') !== route;
     if (!position || Date.now() - lastUpdate > 4000) {
       if (position) show('미니맵 위치 신호를 기다리는 중');
+      heading = cameraHeading = null;
       position = null;
       clearMarker();
       return;
     }
-    if (!map || !page.L?.circleMarker) {
+    if (!map || !page.L?.divIcon) {
       show('게임닷 지도가 로드되기를 기다리는 중');
       return;
     }
-    if (position === renderedPosition) return;
     if (!marker) {
-      marker = page.L.circleMarker(position, {
-        radius: 8, color: '#fff', weight: 3, fillColor: '#287bff',
-        fillOpacity: 1, interactive: false, pane: 'markerPane',
+      const icon = page.L.divIcon({
+        className: 'gamedot-gps-arrow',
+        iconSize: [64, 64],
+        iconAnchor: [32, 32],
+        html: `<svg width="64" height="64" viewBox="0 0 64 64" aria-hidden="true"
+          style="overflow:visible;filter:drop-shadow(0 1px 3px #071e30);pointer-events:none">
+          <path data-view d="M32 32 16 8 Q32 -1 48 8Z"
+            fill="#83efff" fill-opacity=".38" stroke="#d4faff" stroke-width="1"/>
+          <path data-arrow d="M32 16 44 44 32 38 20 44Z" stroke="#fff" stroke-width="2.5"
+            stroke-linejoin="round" fill="#00b8e4"/>
+          <circle data-no-heading cx="32" cy="32" r="7" fill="#00b8e4" stroke="#fff" stroke-width="2.5"/>
+        </svg>`,
+      });
+      marker = page.L.marker(position, {
+        icon, interactive: false, keyboard: false, zIndexOffset: 1500,
       }).addTo(map);
-    } else {
-      marker.setLatLng(position);
+      arrow = marker.getElement().querySelector('[data-arrow]');
+      view = marker.getElement().querySelector('[data-view]');
     }
-    if (follow.checked) map.panTo(position, { animate: false });
-    renderedPosition = position;
+    arrow.setAttribute('visibility', heading === null ? 'hidden' : 'visible');
+    arrow.nextElementSibling.setAttribute('visibility', heading === null ? 'visible' : 'hidden');
+    view.setAttribute('visibility', cameraHeading === null ? 'hidden' : 'visible');
+    if (heading !== null) arrow.setAttribute('transform', `rotate(${heading} 32 32)`);
+    if (cameraHeading !== null) view.setAttribute('transform', `rotate(${cameraHeading} 32 32)`);
+
+    const moved = !renderedPosition || position.some((value, index) => value !== renderedPosition[index]);
+    if (moved) {
+      marker.setLatLng(position);
+      if (follow.checked) map.panTo(position, { animate: false });
+      renderedPosition = position;
+    }
     show('티바트 위치 추적 중');
   }
 
@@ -138,9 +162,10 @@
       return;
     }
     if (message?.event !== 'track' || !message.data) return;
-    const { m, x, y, err } = message.data;
+    const { m, x, y, a, r, err } = message.data;
     if (m != null && m !== 0) {
       position = null;
+      heading = cameraHeading = null;
       clearMarker();
       show('티바트 지상 지도에서 추적할 수 있습니다');
       return;
@@ -158,6 +183,9 @@
         (x === 0 && y === 0)) return;
     // Apply the original v1.7.3 Teyvat conversion, then GameDot's new tile origin.
     position = [origin[0] + (y + 5890) / 2, origin[1] + (x - 2285) / 2];
+    // The app reports character and camera angles counterclockwise from north.
+    if (Number.isFinite(a)) heading = -a;
+    if (Number.isFinite(r)) cameraHeading = -r;
     lastUpdate = Date.now();
   }
 
