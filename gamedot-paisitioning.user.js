@@ -260,7 +260,12 @@
     const root = host.attachShadow({ mode: 'open' });
     root.innerHTML = `
       <style>
-        :host { position: fixed; right: 16px; bottom: 80px; z-index: 10000; }
+        :host {
+          position: fixed;
+          left: min(496px, max(12px, calc(100vw - 261px)));
+          bottom: 16px;
+          z-index: 10000;
+        }
         section { width: 225px; padding: 12px; border: 1px solid #52617a;
           border-radius: 12px; color: #f5f7fb; background: #172234;
           font: 13px/1.4 system-ui, sans-serif; box-shadow: 0 6px 24px #0004; }
