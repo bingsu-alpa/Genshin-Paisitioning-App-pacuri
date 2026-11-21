@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         게임닷 원신 맵스 실시간 위치
 // @namespace    gamedot-map-paisitioning-compat
-// @version      0.2.0
+// @version      0.3.0
 // @description  Haytsir의 원신 파이지셔닝 앱 v1.2.2와 새 게임닷 티바트 지도를 연결합니다.
 // @match        https://gamedot.org/genshin/map/*
 // @run-at       document-start
-// @homepageURL  https://github.com/fairy1598-maker/Genshin-Paisitioning-App-pacuri
-// @downloadURL  https://raw.githubusercontent.com/fairy1598-maker/Genshin-Paisitioning-App-pacuri/main/gamedot-paisitioning.user.js
-// @updateURL    https://raw.githubusercontent.com/fairy1598-maker/Genshin-Paisitioning-App-pacuri/main/gamedot-paisitioning.user.js
+// @homepageURL  https://github.com/bingsu-alpa/Genshin-Paisitioning-App-pacuri
+// @downloadURL  https://raw.githubusercontent.com/bingsu-alpa/Genshin-Paisitioning-App-pacuri/main/gamedot-paisitioning.user.js
+// @updateURL    https://raw.githubusercontent.com/bingsu-alpa/Genshin-Paisitioning-App-pacuri/main/gamedot-paisitioning.user.js
 // @noframes
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
@@ -23,11 +23,12 @@
   let map, marker, arrow, view, panel, status, connect, stop, follow;
   let socket, session, position, renderedPosition;
   let lastUpdate = 0;
+  let frame = null;
   let heading = null;
   let cameraHeading = null;
 
   function show(message) {
-    if (status) status.textContent = message;
+    if (status && status.textContent !== message) status.textContent = message;
   }
 
   function currentMap() {
@@ -57,6 +58,14 @@
     renderedPosition = null;
   }
 
+  function scheduleRender() {
+    if (frame !== null) return;
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      render();
+    });
+  }
+
   function render() {
     if (!panel) return;
     const nextMap = currentMap();
@@ -65,13 +74,9 @@
       map = nextMap;
     }
     panel.hidden = location.pathname.replace(/\/$/, '') !== route;
-    if (!position || Date.now() - lastUpdate > 4000) {
-      if (position) show('미니맵 위치 신호를 기다리는 중');
-      heading = cameraHeading = null;
-      position = null;
-      clearMarker();
-      return;
-    }
+    // Stationary characters may stop producing valid position samples.
+    // Retain the last position until the connection closes or the map changes.
+    if (!position) return;
     if (!map || !page.L?.divIcon) {
       show('게임닷 지도가 로드되기를 기다리는 중');
       return;
@@ -108,7 +113,9 @@
       if (follow.checked) map.panTo(position, { animate: false });
       renderedPosition = position;
     }
-    show('티바트 위치 추적 중');
+    show(Date.now() - lastUpdate > 4000
+      ? '연결 유지 중 · 마지막 확인 위치 표시'
+      : '티바트 위치 추적 중');
   }
 
   function register() {
@@ -144,6 +151,7 @@
     socket = null;
     oldSocket?.close();
     position = null;
+    heading = cameraHeading = null;
     clearMarker();
     connect.disabled = false;
     stop.disabled = true;
@@ -187,6 +195,7 @@
     if (Number.isFinite(a)) heading = -a;
     if (Number.isFinite(r)) cameraHeading = -r;
     lastUpdate = Date.now();
+    scheduleRender();
   }
 
   async function start(launch) {
@@ -274,10 +283,16 @@
     follow = root.querySelector('input');
     connect.addEventListener('click', () => start(true));
     stop.addEventListener('click', () => disconnect());
-    follow.addEventListener('change', () => { renderedPosition = null; });
+    follow.addEventListener('change', () => {
+      renderedPosition = null;
+      scheduleRender();
+    });
     document.body.append(host);
     render();
-    setInterval(render, 150);
+    // Low-frequency maintenance handles SPA navigation and sample age.
+    // Position and direction updates render on the next animation frame.
+    setInterval(render, 1000);
+    document.addEventListener('visibilitychange', scheduleRender);
     window.addEventListener('pagehide', () => disconnect());
   }
 
