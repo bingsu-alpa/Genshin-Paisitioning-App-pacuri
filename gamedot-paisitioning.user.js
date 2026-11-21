@@ -26,6 +26,9 @@
   let frame = null;
   let heading = null;
   let cameraHeading = null;
+  let mapContainer = null;
+  let renderedHeading;
+  let renderedCameraHeading;
 
   function show(message) {
     if (status && status.textContent !== message) status.textContent = message;
@@ -33,6 +36,7 @@
 
   function currentMap() {
     if (location.pathname.replace(/\/$/, '') !== route) return null;
+    if (mapContainer?.isConnected && map) return map;
     const container = document.querySelector('.leaflet-container[role="region"]');
     if (!container) return null;
     if (map?.getContainer() === container) return map;
@@ -45,6 +49,7 @@
         const candidate = hook.memoizedState?.current;
         if (typeof candidate?.getContainer === 'function' && candidate.getContainer() === container &&
             typeof candidate.setView === 'function' && candidate._loaded) {
+          mapContainer = container;
           return candidate;
         }
       }
@@ -56,6 +61,7 @@
     marker?.remove();
     marker = arrow = view = null;
     renderedPosition = null;
+    renderedHeading = renderedCameraHeading = undefined;
   }
 
   function scheduleRender() {
@@ -101,13 +107,20 @@
       arrow = marker.getElement().querySelector('[data-arrow]');
       view = marker.getElement().querySelector('[data-view]');
     }
-    arrow.setAttribute('visibility', heading === null ? 'hidden' : 'visible');
-    arrow.nextElementSibling.setAttribute('visibility', heading === null ? 'visible' : 'hidden');
-    view.setAttribute('visibility', cameraHeading === null ? 'hidden' : 'visible');
-    if (heading !== null) arrow.setAttribute('transform', `rotate(${heading} 32 32)`);
-    if (cameraHeading !== null) view.setAttribute('transform', `rotate(${cameraHeading} 32 32)`);
+    // SVG attributes only need updating when a direction actually changes.
+    if (heading !== renderedHeading) {
+      arrow.setAttribute('visibility', heading === null ? 'hidden' : 'visible');
+      arrow.nextElementSibling.setAttribute('visibility', heading === null ? 'visible' : 'hidden');
+      if (heading !== null) arrow.setAttribute('transform', `rotate(${heading} 32 32)`);
+      renderedHeading = heading;
+    }
+    if (cameraHeading !== renderedCameraHeading) {
+      view.setAttribute('visibility', cameraHeading === null ? 'hidden' : 'visible');
+      if (cameraHeading !== null) view.setAttribute('transform', `rotate(${cameraHeading} 32 32)`);
+      renderedCameraHeading = cameraHeading;
+    }
 
-    const moved = !renderedPosition || position.some((value, index) => value !== renderedPosition[index]);
+    const moved = !renderedPosition || position[0] !== renderedPosition[0] || position[1] !== renderedPosition[1];
     if (moved) {
       marker.setLatLng(position);
       if (follow.checked) map.panTo(position, { animate: false });
@@ -147,6 +160,10 @@
 
   function disconnect(message = '연결 종료') {
     session = null;
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+      frame = null;
+    }
     const oldSocket = socket;
     socket = null;
     oldSocket?.close();
@@ -190,12 +207,20 @@
         !Number.isFinite(x) || !Number.isFinite(y) ||
         (x === 0 && y === 0)) return;
     // Apply the original v1.7.3 Teyvat conversion, then GameDot's new tile origin.
-    position = [origin[0] + (y + 5890) / 2, origin[1] + (x - 2285) / 2];
-    // The app reports character and camera angles counterclockwise from north.
-    if (Number.isFinite(a)) heading = -a;
-    if (Number.isFinite(r)) cameraHeading = -r;
-    lastUpdate = Date.now();
-    scheduleRender();
+    const latitude = origin[0] + (y + 5890) / 2;
+    const longitude = origin[1] + (x - 2285) / 2;
+    const moved = !position || position[0] !== latitude || position[1] !== longitude;
+    const nextHeading = Number.isFinite(a) ? -a : heading;
+    const nextCameraHeading = Number.isFinite(r) ? -r : cameraHeading;
+    const turned = nextHeading !== heading || nextCameraHeading !== cameraHeading;
+    const receivedAt = Date.now();
+    const resumed = receivedAt - lastUpdate > 4000;
+    if (moved) position = [latitude, longitude];
+    heading = nextHeading;
+    cameraHeading = nextCameraHeading;
+    lastUpdate = receivedAt;
+    // Coalesce bursts into one frame, and skip unchanged samples entirely.
+    if (moved || turned || resumed || !marker) scheduleRender();
   }
 
   async function start(launch) {
