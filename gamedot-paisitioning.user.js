@@ -23,6 +23,9 @@
   let map, marker, arrow, view, panel, status, connect, stop, follow;
   let socket, session, position, renderedPosition;
   let lastUpdate = 0;
+  let moveFrom = null;
+  let moveStartedAt = 0;
+  const moveDuration = 60;
   let frame = null;
   let heading = null;
   let cameraHeading = null;
@@ -61,6 +64,7 @@
     marker?.remove();
     marker = arrow = view = null;
     renderedPosition = null;
+    moveFrom = null;
     renderedHeading = renderedCameraHeading = undefined;
   }
 
@@ -120,12 +124,27 @@
       renderedCameraHeading = cameraHeading;
     }
 
-    const moved = !renderedPosition || position[0] !== renderedPosition[0] || position[1] !== renderedPosition[1];
+    // Interpolate small updates across frames without rounding coordinates.
+    // Teleports and a newly created marker go directly to their target.
+    const progress = moveFrom
+      ? Math.min(1, Math.max(0, (Date.now() - moveStartedAt) / moveDuration))
+      : 1;
+    const displayPosition = progress < 1
+      ? [
+          moveFrom[0] + (position[0] - moveFrom[0]) * progress,
+          moveFrom[1] + (position[1] - moveFrom[1]) * progress,
+        ]
+      : position;
+    const moved = !renderedPosition ||
+      displayPosition[0] !== renderedPosition[0] ||
+      displayPosition[1] !== renderedPosition[1];
     if (moved) {
-      marker.setLatLng(position);
-      if (follow.checked) map.panTo(position, { animate: false });
-      renderedPosition = position;
+      marker.setLatLng(displayPosition);
+      if (follow.checked) map.panTo(displayPosition, { animate: false });
+      renderedPosition = displayPosition;
     }
+    if (progress < 1) scheduleRender();
+    else moveFrom = null;
     show(Date.now() - lastUpdate > 4000
       ? '연결 유지 중 · 마지막 확인 위치 표시'
       : '티바트 위치 추적 중');
@@ -212,15 +231,19 @@
     const moved = !position || position[0] !== latitude || position[1] !== longitude;
     const nextHeading = Number.isFinite(a) ? -a : heading;
     const nextCameraHeading = Number.isFinite(r) ? -r : cameraHeading;
-    const turned = nextHeading !== heading || nextCameraHeading !== cameraHeading;
     const receivedAt = Date.now();
-    const resumed = receivedAt - lastUpdate > 4000;
-    if (moved) position = [latitude, longitude];
+    if (moved) {
+      moveFrom = renderedPosition && Math.hypot(
+        latitude - renderedPosition[0], longitude - renderedPosition[1]
+      ) < 256 ? renderedPosition : null;
+      moveStartedAt = receivedAt;
+      position = [latitude, longitude];
+    }
     heading = nextHeading;
     cameraHeading = nextCameraHeading;
     lastUpdate = receivedAt;
-    // Coalesce bursts into one frame, and skip unchanged samples entirely.
-    if (moved || turned || resumed || !marker) scheduleRender();
+    // Every valid sample refreshes the display; bursts share the next frame.
+    scheduleRender();
   }
 
   async function start(launch) {
